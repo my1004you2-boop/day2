@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+import requests
+from datetime import datetime
 
 st.set_page_config(page_title="수강생 취업 현황 대시보드", layout="wide")
 
@@ -54,6 +56,97 @@ st.markdown("""
     <p>수강생 기본정보와 취업현황 파일을 업로드하면 자동으로 분석합니다</p>
 </div>
 """, unsafe_allow_html=True)
+
+# --- 서울 날씨 ---
+@st.cache_data(ttl=600)
+def fetch_seoul_weather():
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude=37.5665&longitude=126.9780"
+        "&current=temperature_2m,weathercode"
+        "&hourly=temperature_2m"
+        "&forecast_days=1"
+        "&timezone=Asia%2FSeoul"
+    )
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+def weathercode_to_label(code):
+    if code == 0:
+        return "맑음 ☀️"
+    elif code in (1, 2, 3):
+        return "구름 ⛅"
+    elif code in range(51, 68):
+        return "비 🌧️"
+    elif code in range(71, 78):
+        return "눈 🌨️"
+    elif code in range(80, 83):
+        return "소나기 🌦️"
+    elif code in range(95, 100):
+        return "뇌우 ⛈️"
+    return "—"
+
+try:
+    weather_data = fetch_seoul_weather()
+    current_temp = weather_data["current"]["temperature_2m"]
+    current_code = weather_data["current"]["weathercode"]
+    weather_label = weathercode_to_label(current_code)
+
+    hourly_times = weather_data["hourly"]["time"]          # ["2024-06-25T00:00", ...]
+    hourly_temps = weather_data["hourly"]["temperature_2m"]
+    now_hour = datetime.now().hour
+    df_hourly = pd.DataFrame({
+        "시간": [f"{i:02d}시" for i in range(24)],
+        "기온(°C)": hourly_temps[:24],
+        "_hour": list(range(24)),
+    })
+
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🌡️ 서울 오늘 날씨 (Open-Meteo)</div>', unsafe_allow_html=True)
+
+    w_col1, w_col2 = st.columns([1, 3], gap="large")
+    with w_col1:
+        st.markdown(f"""
+        <div class="kpi-card" style="margin-top:8px;">
+            <div class="kpi-label">현재 기온</div>
+            <div class="kpi-value" style="font-size:2.6rem;">{current_temp}°</div>
+            <div style="font-size:1rem; color:#7A8599; margin-top:6px;">{weather_label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with w_col2:
+        line = (
+            alt.Chart(df_hourly)
+            .mark_line(point=True, color="#4F8EF7", strokeWidth=2.5)
+            .encode(
+                x=alt.X("시간:N", sort=None, axis=alt.Axis(title=None, labelFontSize=11)),
+                y=alt.Y("기온(°C):Q", scale=alt.Scale(zero=False), axis=alt.Axis(title="°C")),
+                tooltip=["시간:N", alt.Tooltip("기온(°C):Q", format=".1f")],
+            )
+        )
+        now_rule = (
+            alt.Chart(pd.DataFrame({"_hour": [now_hour]}))
+            .mark_rule(color="#F76F6F", strokeDash=[4, 3], strokeWidth=2)
+            .encode(x=alt.X("_hour:O"))
+        )
+        # now_rule uses ordinal position — use a simpler approach: highlight current hour bar
+        highlight = df_hourly[df_hourly["_hour"] == now_hour]
+        dot = (
+            alt.Chart(highlight)
+            .mark_point(size=120, color="#F76F6F", filled=True)
+            .encode(
+                x=alt.X("시간:N", sort=None),
+                y=alt.Y("기온(°C):Q"),
+                tooltip=["시간:N", alt.Tooltip("기온(°C):Q", format=".1f")],
+            )
+        )
+        st.altair_chart((line + dot).properties(height=220).configure_view(strokeWidth=0).configure_axis(grid=False), use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+except Exception as e:
+    st.warning(f"날씨 정보를 불러오지 못했습니다: {e}")
 
 # --- 파일 업로드 ---
 st.markdown('<div class="upload-box">', unsafe_allow_html=True)
